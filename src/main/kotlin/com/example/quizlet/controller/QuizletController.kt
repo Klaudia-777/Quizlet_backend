@@ -1,6 +1,8 @@
 package com.example.quizlet.controller
 
 import com.example.quizlet.dao.TestDao
+import com.example.quizlet.dto.StudentResultDto
+import com.example.quizlet.dto.toEntity
 import com.example.quizlet.entities.*
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.http.HttpHeaders
@@ -19,10 +21,18 @@ class QuizletController(@Autowired val testDao: TestDao) {
 
     @PostMapping("/test")
     @Throws(IOException::class)
-    fun uploadSubjectsFile(@RequestParam(name = "file") multipartFile: MultipartFile): String {
+    fun uploadSubjectsFile(@RequestParam(name = "file") multipartFile: MultipartFile): List<Any> {
         return parseTestFile(multipartFile).run {
             testDao.save(this)
-            id
+            listOf(id, questions.size)
+        }
+    }
+
+    @PostMapping("/{testId}/{noQuestionsToSend}")
+    fun setNoQuestionsToSend(@PathVariable testId: String, @PathVariable noQuestionsToSend: Int) {
+        testDao.findById(testId).ifPresent {
+            it.noQuestionsToSend = noQuestionsToSend
+            testDao.save(it)
         }
     }
 
@@ -33,9 +43,9 @@ class QuizletController(@Autowired val testDao: TestDao) {
     }
 
     @PostMapping("/{testId}/studentResult")
-    fun addStudentResult(studentResult: StudentResult, @PathVariable testId: String) {
+    fun addStudentResult(@RequestBody studentResult: StudentResultDto, @PathVariable testId: String) {
         testDao.findById(testId).ifPresent {
-            it.studentResults.add(studentResult)
+            it.studentResults.add(studentResult.toEntity())
             testDao.save(it)
         }
     }
@@ -44,7 +54,10 @@ class QuizletController(@Autowired val testDao: TestDao) {
     fun sendQuestions(@PathVariable testId: String): List<Question> {
         println(testId)
         println(testDao.findById(testId))
-        return testDao.findById(testId).map { it.questions }.orElse(mutableListOf())
+        val noQuestionsToSend: Int = testDao.findById(testId).get().noQuestionsToSend
+        return testDao.findById(testId).map { it.questions }
+                .orElse(mutableListOf())
+                .shuffled().take(noQuestionsToSend)
     }
 }
 
@@ -54,20 +67,22 @@ UPLOADING TEST DATA FILE
 
 private fun parseRowToAnswer(row: List<String>): Answer {
     return Answer(text = row[0],
-            isCorrect = row[1].toBoolean())
+            correctOrNot = row[1].toBoolean())
 }
 
 private fun parseRowToQuestion(row: List<String>): Question {
     return Question(question = row[0],
-            answers = row.drop(1).chunked(2).map { parseRowToAnswer(it) }.toMutableList())
+            answers = row.drop(1)
+                    .chunked(2)
+                    .filter { it.last().isNotBlank() }
+                    .map { parseRowToAnswer(it) }.toMutableList())
 }
 
 fun parseTestFile(multipartFile: MultipartFile): Test {
 
-    val csvReader = BufferedReader(InputStreamReader(multipartFile.inputStream))
-    var row: String
+    val csvReader = BufferedReader(InputStreamReader(multipartFile.inputStream, "Windows-1250"))
     val lines = csvReader.lines()
-    val questions = lines.map { it.split(",") }
+    val questions = lines.map { it.split(";") }
             .map { parseRowToQuestion(it) }.toList()
     return Test(questions = questions.toMutableList())
 }
@@ -85,11 +100,11 @@ private fun fillHeaders(questions: List<String>): List<String> {
 
 fun toCSVData(studentResults: StudentResult, questions: List<Question>): String {
     val albumNumber = studentResults.albumNumber
-    val questionsIdAndAnwersMap = questions.associate { it.id to it.answers.filter { a -> a.isCorrect } }
+    val questionsIdAndAnwersMap = questions.associate { it.id to it.answers.filter { a -> a.correctOrNot } }
     val studentAnswers = studentResults.choices
             .map { questionsIdAndAnwersMap.getValue(it.questionId).map { a -> a.id } == it.answers }.joinToString(";")
 
-    return "$albumNumber;$studentAnswers\n"
+    return "$albumNumber;$studentAnswers;${studentResults.result}\n"
 }
 
 fun generateFile(response: HttpServletResponse, test: Test) {
