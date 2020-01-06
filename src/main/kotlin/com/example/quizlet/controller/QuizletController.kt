@@ -52,12 +52,13 @@ class QuizletController(@Autowired val testDao: TestDao) {
 
     @GetMapping("/{testId}/questions")
     fun sendQuestions(@PathVariable testId: String): List<Question> {
-        println(testId)
-        println(testDao.findById(testId))
-        val noQuestionsToSend: Int = testDao.findById(testId).get().noQuestionsToSend
-        return testDao.findById(testId).map { it.questions }
-                .orElse(mutableListOf())
-                .shuffled().take(noQuestionsToSend)
+        val optTest = testDao.findById(testId)
+        if (!optTest.isPresent) return emptyList()
+        val test = optTest.get()
+        val noQuestionsToSend: Int = test.noQuestionsToSend
+        return test.questions
+                .shuffled()
+                .take(noQuestionsToSend)
     }
 }
 
@@ -100,11 +101,28 @@ private fun fillHeaders(questions: List<String>): List<String> {
 
 fun toCSVData(studentResults: StudentResult, questions: List<Question>): String {
     val albumNumber = studentResults.albumNumber
-    val questionsIdAndAnwersMap = questions.associate { it.id to it.answers.filter { a -> a.correctOrNot } }
-    val studentAnswers = studentResults.choices
-            .map { questionsIdAndAnwersMap.getValue(it.questionId).map { a -> a.id } == it.answers }.joinToString(";")
+    val mapQA = studentResults.choices.associate { it.questionId to it.answers }
+//    val studentAnswers = studentResults.choices
+//            .map { questionsIdAndAnwersMap.getValue(it.questionId).map { a -> a.id } == it.answers }.joinToString(";")
 
-    return "$albumNumber;$studentAnswers;${studentResults.result}\n"
+    val answers = questions.map { question ->
+        val correctAnswers = question.answers.filter { it.correctOrNot }.map { it.id}
+        return@map if(mapQA.containsKey(question.id)) {
+            val isSame = mapQA.getValue(question.id).toList() == correctAnswers
+            isSame.toString()
+        } else " "
+    }.joinToString(";")
+//    val answers = questions.map { question ->
+//        val studentAnswers = mapQA[question.id]
+//        when (mapQA.containsKey(question.id)) {
+//            true -> question.answers.map {
+//                if (studentAnswers!!.contains(it.id)) it.correctOrNot.toString() else "false"
+//            }.joinToString(";")
+//            false -> question.answers.map {" "}.joinToString(";")
+//        }
+//
+//    }.joinToString(";")
+    return "$albumNumber;$answers;${studentResults.result}\n"
 }
 
 fun generateFile(response: HttpServletResponse, test: Test) {
